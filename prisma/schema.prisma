@@ -37,17 +37,15 @@ model User {
 
 model Invitation {
   id        String   @id @default(uuid())
-  tenantId  String
   email     String
-  token     String   @unique
-  accepted  Boolean  @default(false)
+  tenantId  String
+  invitedBy String
+  status    String   @default("PENDING") // PENDING | ACCEPTED | DECLINED
   createdAt DateTime @default(now())
-  expiresAt DateTime
-
+  
   tenant Tenant @relation(fields: [tenantId], references: [id])
-
-  @@unique([tenantId, email])
 }
+
 
 enum UserRole {
   ADMIN
