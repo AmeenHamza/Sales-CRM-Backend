@@ -1,0 +1,34 @@
+curl -X POST http://localhost:3000/auth/signup \
+-H "Content-Type: application/json" \
+-d '{
+  "tenantName": "Bano Qabil",
+  "email": "admin@banoqabil.com",
+  "password": "123456"
+}'
+
+POST /auth/signup-user
+
+
+{
+  "email": "user1@acme.com",
+  "password": "123456",
+  "tenantId": "uuid-of-existing-tenant"
+}
+
+Login (Admin or Normal User)
+{
+  "email": "user1@acme.com",
+  "password": "123456"
+}
+Invite User (Admin only)
+
+
+{
+  "email": "invitee@acme.com"
+}
+Accept Invite (Invited User)
+{
+  "email": "invitee@acme.com",
+  "password": "123456",
+  "invitationId": "uuid-of-invitation"
+}
