@@ -1,171 +1,241 @@
-import { Injectable, BadRequestException } from '@nestjs/common';
+import {
+  Injectable,
+  BadRequestException,
+  UnauthorizedException,
+  InternalServerErrorException,
+} from '@nestjs/common';
 import { PrismaService } from 'src/prisma/prisma/prisma.service';
-import * as bcrypt from 'bcrypt';
 import { JwtService } from '@nestjs/jwt';
+import * as bcrypt from 'bcrypt';
+
 import { SignupDto } from './dto/signup.dto';
 import { LoginDto } from './dto/login.dto';
 import { AcceptInviteDto } from './dto/accept-invite.dto';
+import { success } from 'src/common/utils/response.util';
 
 @Injectable()
 export class AuthService {
-    constructor(
-        private prisma: PrismaService,
-        private jwtService: JwtService,
-    ) { }
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly jwtService: JwtService,
+  ) {}
 
-    // ✅ Signup method
-    async signup(dto: SignupDto) {
-        // 1️⃣ Create Tenant
-        const tenant = await this.prisma.tenant.create({
-            data: { name: dto.tenantName },
-        });
+  // =========================
+  // SIGNUP → Tenant + Admin
+  // =========================
+  async signup(dto: SignupDto) {
+    try {
+      const existingUser = await this.prisma.user.findUnique({
+        where: { email: dto.email },
+      });
 
-        // 2️⃣ Hash password
-        const hashedPassword = await bcrypt.hash(dto.password, 10);
+      if (existingUser) {
+        throw new BadRequestException('Email already registered');
+      }
 
-        // 3️⃣ Create Admin User
-        const user = await this.prisma.user.create({
-            data: {
-                email: dto.email,
-                password: hashedPassword,
-                role: 'ADMIN',
-                tenantId: tenant.id,
-            },
-        });
+      const tenant = await this.prisma.tenant.create({
+        data: { name: dto.tenantName },
+      });
 
-        // 4️⃣ Issue JWT
-        const token = this.jwtService.sign({
-            userId: user.id,
-            tenantId: tenant.id,
-            role: user.role,
-        });
+      const hashedPassword = await bcrypt.hash(dto.password, 10);
 
-        return {
-            user: { id: user.id, email: user.email, role: user.role },
-            token,
-        };
+      const user = await this.prisma.user.create({
+        data: {
+          email: dto.email,
+          password: hashedPassword,
+          role: 'ADMIN',
+          tenantId: tenant.id,
+        },
+      });
+
+      const token = this.jwtService.sign({
+        sub: user.id,
+        tenantId: tenant.id,
+        role: user.role,
+      });
+
+      return success('Tenant and admin created successfully', {
+        user: {
+          id: user.id,
+          email: user.email,
+          role: user.role,
+          tenantId: tenant.id,
+        },
+        token,
+      });
+    } catch (error) {
+      if (error instanceof BadRequestException) throw error;
+      throw new InternalServerErrorException('Signup process failed');
     }
+  }
 
-    // ✅ Login method
-    async login(dto: LoginDto) {
-        const user = await this.prisma.user.findUnique({
-            where: { email: dto.email },
-        });
+  // =========================
+  // LOGIN
+  // =========================
+  async login(dto: LoginDto) {
+    try {
+      const user = await this.prisma.user.findUnique({
+        where: { email: dto.email },
+      });
 
-        if (!user) throw new Error('Invalid credentials');
+      if (!user) {
+        throw new UnauthorizedException('Invalid email or password');
+      }
 
-        const isMatch = await bcrypt.compare(dto.password, user.password);
-        if (!isMatch) throw new Error('Invalid credentials');
+      const passwordValid = await bcrypt.compare(
+        dto.password,
+        user.password,
+      );
 
-        const token = this.jwtService.sign({
-            userId: user.id,
-            tenantId: user.tenantId,
-            role: user.role,
-        });
+      if (!passwordValid) {
+        throw new UnauthorizedException('Invalid email or password');
+      }
 
-        return {
-            user: { id: user.id, email: user.email, role: user.role },
-            token,
-        };
+      const token = this.jwtService.sign({
+        sub: user.id,
+        tenantId: user.tenantId,
+        role: user.role,
+      });
+
+      return success('Login successful', {
+        user: {
+          id: user.id,
+          email: user.email,
+          role: user.role,
+          tenantId: user.tenantId,
+        },
+        token,
+      });
+    } catch (error) {
+      if (error instanceof UnauthorizedException) throw error;
+      throw new InternalServerErrorException('Login failed');
     }
-    async signupUser(email: string, password: string, tenantId: string) {
-        // 1️⃣ Check if tenant exists
-        const tenant = await this.prisma.tenant.findUnique({
-            where: { id: tenantId },
-        });
-        if (!tenant) {
-            throw new Error('Tenant does not exist');
-        }
+  }
 
-        // 2️⃣ Check if email already exists
-        const existingUser = await this.prisma.user.findUnique({ where: { email } });
-        if (existingUser) {
-            throw new Error('Email already in use');
-        }
+  // =========================
+  // SIGNUP USER (DIRECT)
+  // =========================
+  async signupUser(email: string, password: string, tenantId: string) {
+    try {
+      const tenant = await this.prisma.tenant.findUnique({
+        where: { id: tenantId },
+      });
 
-        // 3️⃣ Hash password
-        const hashedPassword = await bcrypt.hash(password, 10);
+      if (!tenant) {
+        throw new BadRequestException('Tenant does not exist');
+      }
 
-        // 4️⃣ Create user
-        const user = await this.prisma.user.create({
-            data: {
-                email,
-                password: hashedPassword,
-                role: 'USER',
-                tenantId: tenant.id,
-            },
-        });
+      const existingUser = await this.prisma.user.findUnique({
+        where: { email },
+      });
 
-        // 5️⃣ Issue JWT
-        const token = this.jwtService.sign({
-            userId: user.id,
-            tenantId: tenant.id,
-            role: user.role,
-        });
+      if (existingUser) {
+        throw new BadRequestException('Email already in use');
+      }
 
-        return {
-            user: { id: user.id, email: user.email, role: user.role, tenantId: tenant.id },
-            token,
-        };
+      const hashedPassword = await bcrypt.hash(password, 10);
+
+      const user = await this.prisma.user.create({
+        data: {
+          email,
+          password: hashedPassword,
+          role: 'USER',
+          tenantId: tenant.id,
+        },
+      });
+
+      const token = this.jwtService.sign({
+        sub: user.id,
+        tenantId: user.tenantId,
+        role: user.role,
+      });
+
+      return success('User created successfully', {
+        user: {
+          id: user.id,
+          email: user.email,
+          role: user.role,
+          tenantId: user.tenantId,
+        },
+        token,
+      });
+    } catch (error) {
+      if (error instanceof BadRequestException) throw error;
+      throw new InternalServerErrorException('User signup failed');
     }
+  }
 
-    async inviteUser(email: string, admin: any) {
-        // 1️⃣ Check if email already exists
-        const existingUser = await this.prisma.user.findUnique({ where: { email } });
-        if (existingUser) throw new BadRequestException('User already exists');
+  // =========================
+  // INVITE USER
+  // =========================
+  async inviteUser(email: string, admin: { userId: string; tenantId: string }) {
+    try {
+      const existingUser = await this.prisma.user.findUnique({
+        where: { email },
+      });
 
-        // 2️⃣ Create invitation
-        const invitation = await this.prisma.invitation.create({
-            data: {
-                email,
-                tenantId: admin.tenantId,
-                invitedBy: admin.userId, // ✅ now exists in schema
-                status: 'PENDING',        // ✅ now exists in schema
-            },
-        });
+      if (existingUser) {
+        throw new BadRequestException('User already exists');
+      }
 
-        return invitation;
+      const invitation = await this.prisma.invitation.create({
+        data: {
+          email,
+          tenantId: admin.tenantId,
+          invitedBy: admin.userId,
+          status: 'PENDING',
+        },
+      });
+
+      return success('Invitation created successfully', invitation);
+    } catch (error) {
+      if (error instanceof BadRequestException) throw error;
+      throw new InternalServerErrorException('Failed to invite user');
     }
+  }
 
+  // =========================
+  // ACCEPT INVITE
+  // =========================
+  async acceptInvite(dto: AcceptInviteDto) {
+    try {
+      const invitation = await this.prisma.invitation.findUnique({
+        where: { id: dto.invitationId },
+      });
 
-    // ✅ Invited user accepts invitation
-    async acceptInvite(dto: AcceptInviteDto) {
-        // 1️⃣ Find invitation
-        const invitation = await this.prisma.invitation.findUnique({
-            where: { id: dto.invitationId },
-        });
+      if (!invitation || invitation.status !== 'PENDING') {
+        throw new BadRequestException('Invalid or expired invitation');
+      }
 
-        if (!invitation || invitation.status !== 'PENDING') {
-            throw new BadRequestException('Invalid or expired invitation');
-        }
+      const hashedPassword = await bcrypt.hash(dto.password, 10);
 
-        // 2️⃣ Hash password
-        const hashedPassword = await bcrypt.hash(dto.password, 10);
+      const user = await this.prisma.user.create({
+        data: {
+          email: dto.email,
+          password: hashedPassword,
+          role: 'USER',
+          tenantId: invitation.tenantId,
+        },
+      });
 
-        // 3️⃣ Create user under tenant
-        const user = await this.prisma.user.create({
-            data: {
-                email: dto.email,
-                password: hashedPassword,
-                role: 'USER',
-                tenantId: invitation.tenantId,
-            },
-        });
+      await this.prisma.invitation.update({
+        where: { id: invitation.id },
+        data: { status: 'ACCEPTED' },
+      });
 
-        // 4️⃣ Mark invitation accepted
-        await this.prisma.invitation.update({
-            where: { id: dto.invitationId },
-            data: { status: 'ACCEPTED' }, // ✅ safe now
-        });
+      const token = this.jwtService.sign({
+        sub: user.id,
+        tenantId: user.tenantId,
+        role: user.role,
+      });
 
-        // 5️⃣ Issue JWT
-        const token = this.jwtService.sign({
-            userId: user.id,
-            tenantId: user.tenantId,
-            role: user.role,
-        });
-
-        return { user, token };
+      return success('Invitation accepted successfully', {
+        user,
+        token,
+      });
+    } catch (error) {
+      if (error instanceof BadRequestException) throw error;
+      throw new InternalServerErrorException('Accept invite failed');
     }
-
+  }
 }
